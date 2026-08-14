@@ -6,8 +6,7 @@
 #
 # No base weights baked in. Krea 2 is already on the network volume for the
 # render endpoint, and both attach the same volume, so it is downloaded once.
-# That keeps this image small enough to build on a rented pod and push in
-# minutes, which matters because there is no local disk to build it on.
+# That keeps this image small enough for RunPod to build in a few minutes.
 FROM runpod/base:0.6.2-cuda12.4.1
 
 ENV PYTHONUNBUFFERED=1 \
@@ -34,7 +33,14 @@ RUN python -c "\
 from huggingface_hub import snapshot_download; \
 snapshot_download('ostris/krea2_turbo_training_adapter', local_dir='/adapters/krea2_turbo_training_adapter')"
 
-COPY train-krea2.yaml handler.py /build/
+# Paths are relative to the REPOSITORY ROOT, not to this file.
+#
+# The endpoint builds with Dockerfile path `/trainer/Dockerfile` and build
+# context `.`, so the context is the repo root and `train-krea2.yaml` alone does
+# not resolve — that mismatch is what failed the first build, and it failed with
+# an empty log rather than a legible error. If you ever set the build context to
+# `/trainer`, drop the `trainer/` prefix here or it breaks the other way.
+COPY trainer/train-krea2.yaml trainer/handler.py /build/
 
 # Fail the build rather than the first training.
 RUN test -f /ai-toolkit/run.py || { echo "MISSING: ai-toolkit/run.py"; exit 1; } && \
