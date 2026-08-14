@@ -1,0 +1,90 @@
+# ai-toolkit config for a Krea 2 persona LoRA.
+#
+# A TEMPLATE. `handler.py` fills in the per-run fields before each training:
+# `training_folder`, `trigger_word`, `network.linear`, `network.linear_alpha`,
+# `train.steps`, `datasets[0].folder_path`, and the three `model.*` paths, which
+# point at the shared network volume.
+#
+# Everything left here is a deliberate default, and the ones that matter:
+#
+#   caption_ext / captions   There are none. The dataset is forty frames drawn
+#                            from her frozen identity sheet by prompts we wrote,
+#                            so the trigger word alone is the caption. An
+#                            autocaptioner re-describing a face it was never
+#                            told about is how a training set acquires opinions
+#                            about her — the same reason `autocaption: false` is
+#                            hardcoded on the Replicate trainer row.
+#
+#   resolution               Multi-resolution buckets. The dataset is portrait
+#                            (1024x1280) but a LoRA trained at one shape renders
+#                            badly at others, and the feed asks for several.
+#
+#   network.linear = 16      Rank. Overridden per run. 16 is enough for one
+#                            face; higher starts learning the backgrounds too.
+---
+job: extension
+config:
+  name: persona_lora
+  process:
+    - type: sd_trainer
+      training_folder: /runpod-volume/training/PLACEHOLDER
+      device: cuda:0
+      trigger_word: PLACEHOLDER
+
+      network:
+        type: lora
+        linear: 16
+        linear_alpha: 16
+
+      save:
+        dtype: float16
+        save_every: 500
+        # Two: the run's own output, and one fallback. More is disk on a volume
+        # that also holds the models both endpoints load from.
+        max_step_saves_to_keep: 2
+
+      datasets:
+        - folder_path: /PLACEHOLDER
+          caption_ext: txt
+          caption_dropout_rate: 0.0
+          shuffle_tokens: false
+          cache_latents_to_disk: true
+          resolution: [768, 1024, 1280]
+
+      train:
+        batch_size: 1
+        steps: 1000
+        gradient_accumulation_steps: 1
+        train_unet: true
+        # Krea 2's text encoder is a 4B VLM. Training it as well would triple
+        # the memory for a face the transformer is perfectly able to learn.
+        train_text_encoder: false
+        gradient_checkpointing: true
+        noise_scheduler: flowmatch
+        optimizer: adamw8bit
+        lr: 1e-4
+        dtype: bf16
+
+        ema_config:
+          use_ema: true
+          ema_decay: 0.99
+
+      model:
+        # All three filled in by handler.py from the network volume.
+        name_or_path: PLACEHOLDER
+        text_encoder_path: PLACEHOLDER
+        vae_path: PLACEHOLDER
+        arch: krea2
+        # What makes Krea 2 trainable at all.
+        adapter_path: /adapters/krea2_turbo_training_adapter
+        quantize: true
+
+      sample:
+        # Off. The app renders its own eight evaluation samples afterwards and
+        # scores them against her identity sheet — sampling here would cost GPU
+        # minutes to produce images nothing reads.
+        sample_every: 0
+
+meta:
+  name: persona_lora
+  version: '1.0'
