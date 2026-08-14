@@ -58,6 +58,33 @@ RUN set -eux; \
       || { echo "ERROR: this ComfyUI has no krea2 CLIPLoader type — check COMFYUI_REF"; exit 1; }; \
     echo "krea2 CLIPLoader type present"
 
+# comfyui-krea2edit, which is what lets Krea 2 be handed a photograph of her.
+#
+# Apache-2.0, no Python dependencies of its own — it registers two nodes,
+# Krea2EditModelPatch and Krea2EditGroundedEncode, that do in-context reference
+# conditioning stock ComfyUI has no equivalent for. Pinned by ref for the same
+# reason ComfyUI is not: this one is small enough to read, and it runs inside a
+# container that holds the R2 credentials.
+#
+# Cloned rather than installed through comfy-node-install because it is not in
+# the registry, and because a `git clone` is the whole documented install.
+ARG KREA2EDIT_REF=main
+RUN set -eux; \
+    git clone --depth 1 --branch "${KREA2EDIT_REF}" \
+      https://github.com/lbouaraba/comfyui-krea2edit.git \
+      /comfyui/custom_nodes/comfyui-krea2edit
+
+# Fail the BUILD if the pack did not register what the workflow binds to.
+#
+# Same twenty seconds, same reasoning as the krea2 CLIPLoader check above: a
+# missing node class does not fail loudly at render time, it fails as a
+# COMPLETED job with the reason buried in output.errors.
+RUN set -eux; \
+    grep -q 'Krea2EditModelPatch' /comfyui/custom_nodes/comfyui-krea2edit/__init__.py \
+      && grep -q 'Krea2EditGroundedEncode' /comfyui/custom_nodes/comfyui-krea2edit/__init__.py \
+      || { echo "ERROR: comfyui-krea2edit registered neither node — check KREA2EDIT_REF"; exit 1; }; \
+    echo "krea2edit nodes present"
+
 # VHS_VideoCombine, for the Wan video workflows.
 #
 # Deliberately non-fatal. Nothing in the Krea stills path needs it, and
