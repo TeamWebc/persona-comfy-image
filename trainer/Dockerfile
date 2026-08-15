@@ -51,7 +51,19 @@ RUN pip install --no-cache-dir -r /ai-toolkit/requirements.txt torchaudio && \
 # A second pass rather than a reordering: requirements.txt pins torch itself, so
 # installing first would just be overwritten. --force-reinstall is what makes
 # this win the last word.
-RUN pip install --no-cache-dir --force-reinstall \
+# `--no-deps` is load-bearing, not tidiness.
+#
+# Without it, --force-reinstall reinstalls torch's dependency tree as well, and
+# that includes numpy. The replacement crossed the 1.x/2.x ABI boundary while
+# diffusers, scipy and the rest stayed compiled against the old one, so the
+# image built fine and then died on the worker with
+#
+#   numpy.dtype size changed — Expected 96 from C header, got 88 from PyObject
+#
+# which is the C-extension version of "these two packages disagree about a
+# struct". Only the three CUDA wheels need replacing; everything the
+# requirements pass resolved is already correct and must be left alone.
+RUN pip install --no-cache-dir --force-reinstall --no-deps \
       torch torchvision torchaudio \
       --index-url https://download.pytorch.org/whl/cu124
 
@@ -94,10 +106,13 @@ RUN test -f /ai-toolkit/run.py || { echo "MISSING: ai-toolkit/run.py"; exit 1; }
     test -d /adapters/krea2_turbo_training_adapter || { echo "MISSING: training adapter"; exit 1; } && \
     python3.11 -c "import runpod, boto3, yaml, requests" && \
     python3.11 -c "\
-import torch, sys; \
+import torch, numpy, sys; \
 v = torch.version.cuda or ''; \
-print('torch', torch.__version__, 'cuda', v); \
+print('torch', torch.__version__, 'cuda', v, '| numpy', numpy.__version__); \
 sys.exit(0 if v.startswith('12.4') else 1)" && \
+    python3.11 -c "\
+from diffusers import DPMSolverMultistepScheduler; \
+print('diffusers imports against this numpy OK')" && \
     cd /ai-toolkit && python3.11 -c "from toolkit.job import get_job" && \
     echo "trainer image OK"
 
