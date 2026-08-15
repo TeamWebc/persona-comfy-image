@@ -35,6 +35,26 @@ RUN git clone --recurse-submodules https://github.com/ostris/ai-toolkit /ai-tool
 RUN pip install --no-cache-dir -r /ai-toolkit/requirements.txt torchaudio && \
     pip install --no-cache-dir runpod boto3 requests pyyaml
 
+# Then put torch back on CUDA 12.4, which is the one this image is built for.
+#
+# ai-toolkit's requirements pull torch from PyPI, and the default wheel there is
+# now compiled for CUDA 12.8. It installs and imports perfectly; it dies at the
+# first `torch.cuda` call, on the worker, after the model has downloaded:
+#
+#   RuntimeError: The NVIDIA driver on your system is too old (found version 12040)
+#
+# 12040 is the host driver, not the container. RunPod hands out machines with
+# mixed driver ages, so the same image trained on one worker and failed on the
+# next — a failure that looks intermittent and is not. Pinning the wheel to
+# cu124 means the image runs on any of them.
+#
+# A second pass rather than a reordering: requirements.txt pins torch itself, so
+# installing first would just be overwritten. --force-reinstall is what makes
+# this win the last word.
+RUN pip install --no-cache-dir --force-reinstall \
+      torch torchvision torchaudio \
+      --index-url https://download.pytorch.org/whl/cu124
+
 # `python3.11` everywhere. Not `python`, and not `python3` either.
 #
 # This base image has three: no bare `python` at all, a system `python3` which
@@ -73,6 +93,11 @@ COPY trainer/train-krea2.yaml trainer/handler.py /build/
 RUN test -f /ai-toolkit/run.py || { echo "MISSING: ai-toolkit/run.py"; exit 1; } && \
     test -d /adapters/krea2_turbo_training_adapter || { echo "MISSING: training adapter"; exit 1; } && \
     python3.11 -c "import runpod, boto3, yaml, requests" && \
+    python3.11 -c "\
+import torch, sys; \
+v = torch.version.cuda or ''; \
+print('torch', torch.__version__, 'cuda', v); \
+sys.exit(0 if v.startswith('12.4') else 1)" && \
     cd /ai-toolkit && python3.11 -c "from toolkit.job import get_job" && \
     echo "trainer image OK"
 
