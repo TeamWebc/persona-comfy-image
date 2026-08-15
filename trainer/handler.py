@@ -12,10 +12,6 @@ activation gate. This does one thing:
 published by `server/media/weights-host.js:publishDatasetZip`. `weights_url` is
 the trained `.safetensors` on the same bucket, which the app then fetches,
 archives, and copies onto the render volume.
-
-Base weights are read from the network volume rather than baked into this image
-— the same volume the render endpoint uses, so Krea 2 is downloaded once and
-serves both.
 """
 
 import collections
@@ -36,6 +32,27 @@ import yaml
 # The volume, mounted by RunPod on every serverless worker.
 VOLUME = Path("/runpod-volume")
 MODELS = VOLUME / "models"
+
+# The training checkpoints, which are NOT the rendering ones.
+#
+# The render endpoint loads `*_fp8_scaled`, and those carry a `weight_scale`
+# tensor beside every quantised weight. ComfyUI expects that; ai-toolkit's
+# SingleStreamDiT does not, and `load_state_dict(strict=True)` rejects all 232
+# of them:
+#
+#   Unexpected key(s) in state_dict: "blocks.0.attn.wq.weight_scale", ...
+#
+# So training reads the plain bf16 variants of the same model. Bigger on disk
+# and bigger to load; `quantize: true` in the config brings them back down once
+# they are in memory. Downloaded on first use rather than baked into the image,
+# because they are ~34GB and both endpoints share the volume they land on.
+TRAIN_REPO = "Comfy-Org/Krea-2"
+TRAIN_FILES = {
+    "name_or_path": "diffusion_models/krea2_turbo_bf16.safetensors",
+    "text_encoder_path": "text_encoders/qwen3vl_4b_bf16.safetensors",
+    # Not quantised in the first place, so the render copy is the training copy.
+    "vae_path": "vae/qwen_image_vae.safetensors",
+}
 
 # ai-toolkit is installed at build time; this is where its config lives.
 AI_TOOLKIT = Path("/ai-toolkit")
@@ -89,6 +106,32 @@ def _fetch_dataset(url: str, into: Path) -> int:
     return len(images)
 
 
+def _ensure_base_weight(rel: str) -> Path:
+    """
+    The training checkpoint, fetched to the volume the first time it is wanted.
+
+    Idempotent and shared: both endpoints mount the same volume, so this is
+    downloaded once ever, not once per run. Written to a temp name and renamed,
+    because two workers starting together would otherwise both be part-way
+    through the same 26GB file and each would see the other's half as complete.
+    """
+    target = MODELS / rel
+    if target.exists() and target.stat().st_size > 0:
+        return target
+
+    from huggingface_hub import hf_hub_download
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    print(f"fetching training weight {rel} (first run only)", flush=True)
+    cached = hf_hub_download(repo_id=TRAIN_REPO, filename=rel)
+
+    staged = target.with_suffix(target.suffix + f".{os.getpid()}.part")
+    shutil.copyfile(cached, staged)
+    os.replace(staged, target)
+    print(f"  -> {target} ({target.stat().st_size / 1e9:.1f} GB)", flush=True)
+    return target
+
+
 def _write_config(job_dir: Path, dataset_dir: Path, trigger_word: str, steps: int, rank: int) -> Path:
     """Fill the ai-toolkit config template for this run."""
     config = yaml.safe_load(CONFIG_TEMPLATE.read_text())
@@ -101,11 +144,10 @@ def _write_config(job_dir: Path, dataset_dir: Path, trigger_word: str, steps: in
     process["train"]["steps"] = steps
     process["datasets"][0]["folder_path"] = str(dataset_dir)
 
-    # Base weights off the shared volume. Same files the render endpoint loads,
-    # so Krea 2 is downloaded once for both.
-    process["model"]["name_or_path"] = str(MODELS / "diffusion_models" / "krea2_turbo_fp8_scaled.safetensors")
-    process["model"]["text_encoder_path"] = str(MODELS / "text_encoders" / "qwen3vl_4b_fp8_scaled.safetensors")
-    process["model"]["vae_path"] = str(MODELS / "vae" / "qwen_image_vae.safetensors")
+    # Base weights off the shared volume — the bf16 variants, not the
+    # fp8_scaled ones the renderer uses. See TRAIN_FILES for why.
+    for field, rel in TRAIN_FILES.items():
+        process["model"][field] = str(_ensure_base_weight(rel))
 
     out = job_dir / "config.yaml"
     out.write_text(yaml.safe_dump(config))
@@ -152,10 +194,9 @@ def handler(job):
         # silence is indistinguishable from a hang, and the RunPod console log is
         # the only window into it. But `subprocess.run` with no capture throws
         # the output away, so a failure came back as `ai-toolkit exited 1` and
-        # nothing else: the app's deadletter row, the LoRA record and the toast
-        # all said the same four words, and the traceback existed only in a
-        # console log that RunPod purges with the job. That is a GPU cold start
-        # spent to learn an exit code, twice.
+        # nothing else, with the traceback only in a console log RunPod purges
+        # along with the job. That is a GPU cold start spent to learn an exit
+        # code, twice.
         #
         # So: print each line as it arrives, and keep the last few. The tail
         # rides home in the error and lands in the deadletter row.
