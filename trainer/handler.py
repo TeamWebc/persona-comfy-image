@@ -18,6 +18,7 @@ Base weights are read from the network volume rather than baked into this image
 serves both.
 """
 
+import collections
 import os
 import shutil
 import subprocess
@@ -145,22 +146,48 @@ def handler(job):
         count = _fetch_dataset(dataset_url, dataset_dir)
         config_path = _write_config(job_dir, dataset_dir, trigger_word, steps, rank)
 
-        # Streamed to the worker log rather than captured: a training is long
-        # enough that silence is indistinguishable from a hang, and the RunPod
-        # console log is the only window into it.
+        # Streamed AND kept. Both, because they answer different questions.
+        #
+        # Streaming is what makes a thirty-minute run legible while it happens —
+        # silence is indistinguishable from a hang, and the RunPod console log is
+        # the only window into it. But `subprocess.run` with no capture throws
+        # the output away, so a failure came back as `ai-toolkit exited 1` and
+        # nothing else: the app's deadletter row, the LoRA record and the toast
+        # all said the same four words, and the traceback existed only in a
+        # console log that RunPod purges with the job. That is a GPU cold start
+        # spent to learn an exit code, twice.
+        #
+        # So: print each line as it arrives, and keep the last few. The tail
+        # rides home in the error and lands in the deadletter row.
         #
         # `sys.executable` rather than the string "python". This base image
         # ships python3.11 and no bare `python` on PATH — the Dockerfile learned
         # that at build time with an exit 127, and this line would have learned
         # it one GPU cold start into a paid run. It is the interpreter already
         # running us, so it cannot be the wrong one.
-        result = subprocess.run(
+        tail = collections.deque(maxlen=40)
+        proc = subprocess.Popen(
             [sys.executable, str(AI_TOOLKIT / "run.py"), str(config_path)],
             cwd=str(AI_TOOLKIT),
-            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
-        if result.returncode != 0:
-            return {"error": f"ai-toolkit exited {result.returncode}"}
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            stripped = line.strip()
+            # Progress bars redraw thousands of times and would fill the tail
+            # with one step counter, crowding out the traceback underneath it.
+            if stripped and not stripped.startswith(("\r", "|")):
+                tail.append(stripped)
+        code = proc.wait()
+
+        if code != 0:
+            return {
+                "error": f"ai-toolkit exited {code}: " + " | ".join(list(tail)[-12:]),
+                "log_tail": list(tail),
+            }
 
         weights = _find_safetensors(job_dir)
 
