@@ -26,10 +26,15 @@ RUN git clone --recurse-submodules https://github.com/ostris/ai-toolkit /ai-tool
 RUN pip install --no-cache-dir -r /ai-toolkit/requirements.txt && \
     pip install --no-cache-dir runpod boto3 requests pyyaml
 
+# `python3`, never bare `python`. This base image ships python3.11 and pip but
+# no `python` on PATH — pip's own upgrade notice in the build log says
+# `python3.11 -m pip`. The bare form fails with exit 127, and it failed here,
+# three minutes into installing torch, which is a slow way to find out.
+#
 # The adapter that makes Krea 2 trainable. ~19.7k downloads, the same pattern
 # ostris ships for Z-Image and FLUX-schnell. Small enough to bake, and baking it
 # means a cold start does not read it over the volume.
-RUN python -c "\
+RUN python3 -c "\
 from huggingface_hub import snapshot_download; \
 snapshot_download('ostris/krea2_turbo_training_adapter', local_dir='/adapters/krea2_turbo_training_adapter')"
 
@@ -45,7 +50,7 @@ COPY trainer/train-krea2.yaml trainer/handler.py /build/
 # Fail the build rather than the first training.
 RUN test -f /ai-toolkit/run.py || { echo "MISSING: ai-toolkit/run.py"; exit 1; } && \
     test -d /adapters/krea2_turbo_training_adapter || { echo "MISSING: training adapter"; exit 1; } && \
-    python -c "import runpod, boto3, yaml, requests" && \
+    python3 -c "import runpod, boto3, yaml, requests" && \
     echo "trainer image OK"
 
-CMD ["python", "-u", "/build/handler.py"]
+CMD ["python3", "-u", "/build/handler.py"]
