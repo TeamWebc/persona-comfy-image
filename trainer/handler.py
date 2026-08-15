@@ -21,6 +21,7 @@ serves both.
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import zipfile
@@ -147,8 +148,14 @@ def handler(job):
         # Streamed to the worker log rather than captured: a training is long
         # enough that silence is indistinguishable from a hang, and the RunPod
         # console log is the only window into it.
+        #
+        # `sys.executable` rather than the string "python". This base image
+        # ships python3.11 and no bare `python` on PATH — the Dockerfile learned
+        # that at build time with an exit 127, and this line would have learned
+        # it one GPU cold start into a paid run. It is the interpreter already
+        # running us, so it cannot be the wrong one.
         result = subprocess.run(
-            ["python", str(AI_TOOLKIT / "run.py"), str(config_path)],
+            [sys.executable, str(AI_TOOLKIT / "run.py"), str(config_path)],
             cwd=str(AI_TOOLKIT),
             check=False,
         )
