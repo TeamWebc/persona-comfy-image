@@ -23,7 +23,16 @@ ARG AI_TOOLKIT_REF=main
 RUN git clone --recurse-submodules https://github.com/ostris/ai-toolkit /ai-toolkit && \
     cd /ai-toolkit && git checkout ${AI_TOOLKIT_REF}
 
-RUN pip install --no-cache-dir -r /ai-toolkit/requirements.txt && \
+# `torchaudio` is not a typo and not ours: ai-toolkit imports it at module load
+# (`toolkit/config_modules.py` line 7, reached through jobs/__init__ before any
+# training starts) and does not list it in requirements.txt. Without it every
+# run dies in the first second with ModuleNotFoundError, after the worker has
+# spun up — which reads as "ai-toolkit exited 1" and costs a cold start to find.
+#
+# Installed in the same resolution pass as the requirements rather than a second
+# `pip install`, so the resolver sees torch and torchaudio together and cannot
+# pick a pair with mismatched ABIs.
+RUN pip install --no-cache-dir -r /ai-toolkit/requirements.txt torchaudio && \
     pip install --no-cache-dir runpod boto3 requests pyyaml
 
 # `python3.11` everywhere. Not `python`, and not `python3` either.
@@ -55,9 +64,16 @@ snapshot_download('ostris/krea2_turbo_training_adapter', local_dir='/adapters/kr
 COPY trainer/train-krea2.yaml trainer/handler.py /build/
 
 # Fail the build rather than the first training.
+#
+# The ai-toolkit import is the one that matters. Checking `run.py` exists proves
+# nothing — the file was there for the run that died, and the failure was three
+# imports deep in a dependency it never declared. Importing the job module is
+# the same code path a training takes, so a missing package fails here in
+# twenty seconds instead of after a GPU cold start.
 RUN test -f /ai-toolkit/run.py || { echo "MISSING: ai-toolkit/run.py"; exit 1; } && \
     test -d /adapters/krea2_turbo_training_adapter || { echo "MISSING: training adapter"; exit 1; } && \
     python3.11 -c "import runpod, boto3, yaml, requests" && \
+    cd /ai-toolkit && python3.11 -c "from toolkit.job import get_job" && \
     echo "trainer image OK"
 
 CMD ["python3.11", "-u", "/build/handler.py"]
