@@ -119,6 +119,14 @@ def _ensure_base_weight(rel: str) -> Path:
     if target.exists() and target.stat().st_size > 0:
         return target
 
+    # Plain HTTP, not Xet.
+    #
+    # huggingface_hub 1.x downloads through its Xet backend by default, and on a
+    # 26GB checkpoint it dies with "File reconstruction error: Internal Writer
+    # Error: Background writer channel closed" — a failure inside the
+    # downloader, nothing to do with the file or the trainer. Set before the
+    # import because the backend is chosen at module load.
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
     from huggingface_hub import hf_hub_download
 
     target.parent.mkdir(parents=True, exist_ok=True)
