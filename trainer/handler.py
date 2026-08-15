@@ -12,6 +12,10 @@ activation gate. This does one thing:
 published by `server/media/weights-host.js:publishDatasetZip`. `weights_url` is
 the trained `.safetensors` on the same bucket, which the app then fetches,
 archives, and copies onto the render volume.
+
+Base weights are read from the network volume rather than baked into this image
+— the same volume the render endpoint uses, so Krea 2 is downloaded once and
+serves both.
 """
 
 import collections
@@ -32,6 +36,42 @@ import yaml
 # The volume, mounted by RunPod on every serverless worker.
 VOLUME = Path("/runpod-volume")
 MODELS = VOLUME / "models"
+
+# ---------------------------------------------------------------------------
+# Everything HuggingFace writes goes on the volume, not in the container.
+#
+# `_ensure_base_weight` below fetches the two checkpoints we know about, and it
+# writes them to the volume deliberately. But ai-toolkit ALSO downloads on its
+# own account — the Qwen text encoder's tokenizer and companion files — and
+# those go through `hf_hub_download`'s default cache, which lives on the
+# container's overlay filesystem. That overlay is a few gigabytes; the volume is
+# 150. So a run with 73GB free on the volume still died at
+#
+#   _hf_hub_download_to_cache_dir -> OSError: [Errno 122] Disk quota exceeded
+#   Reconstructing: 37% | 3.24GB / 8.88GB
+#
+# having filled a disk nobody meant to be using. Set before any import that
+# might pull in huggingface_hub, because the cache location is read at import.
+#
+# HF_HOME moves the whole tree (hub cache, tokenizers, datasets); HF_HUB_CACHE
+# is set too because a library that reads only the more specific variable would
+# otherwise still land in the container.
+# ---------------------------------------------------------------------------
+# The Dockerfile already sets HF_HOME to /runpod-volume/.cache/huggingface, and
+# `setdefault` leaves it alone — this is the fallback for a worker started
+# without it. The two below are DERIVED from whatever HF_HOME ends up being
+# rather than written out again: hardcoding a second absolute path split the
+# cache across two directories and re-downloaded what was already there.
+os.environ.setdefault("HF_HOME", str(VOLUME / ".cache" / "huggingface"))
+_HF_HOME = Path(os.environ["HF_HOME"])
+os.environ.setdefault("HF_HUB_CACHE", str(_HF_HOME / "hub"))
+os.environ.setdefault("TRANSFORMERS_CACHE", str(_HF_HOME / "transformers"))
+# Xet's reconstruction path is what produced both the "Background writer
+# channel closed" crash and the partial-write above; plain HTTP is slower and
+# survives.
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+for _cache in ("HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE"):
+    Path(os.environ[_cache]).mkdir(parents=True, exist_ok=True)
 
 # The training checkpoints, which are NOT the rendering ones.
 #
@@ -106,6 +146,16 @@ def _fetch_dataset(url: str, into: Path) -> int:
     return len(images)
 
 
+def _remote_size(rel: str) -> int:
+    """How big the checkpoint is, without downloading it. 0 if HF won't say."""
+    url = f"https://huggingface.co/{TRAIN_REPO}/resolve/main/{rel}"
+    try:
+        res = requests.head(url, allow_redirects=True, timeout=30)
+        return int(res.headers.get("content-length") or 0)
+    except Exception:  # noqa: BLE001 — a missing preflight must not block the run
+        return 0
+
+
 def _ensure_base_weight(rel: str) -> Path:
     """
     The training checkpoint, fetched to the volume the first time it is wanted.
@@ -119,23 +169,48 @@ def _ensure_base_weight(rel: str) -> Path:
     if target.exists() and target.stat().st_size > 0:
         return target
 
-    # Plain HTTP, not Xet.
-    #
-    # huggingface_hub 1.x downloads through its Xet backend by default, and on a
-    # 26GB checkpoint it dies with "File reconstruction error: Internal Writer
-    # Error: Background writer channel closed" — a failure inside the
-    # downloader, nothing to do with the file or the trainer. Set before the
-    # import because the backend is chosen at module load.
-    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    # Cache location and the Xet switch are both set at module scope, before
+    # anything can import huggingface_hub — see the block under VOLUME.
     from huggingface_hub import hf_hub_download
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    print(f"fetching training weight {rel} (first run only)", flush=True)
-    cached = hf_hub_download(repo_id=TRAIN_REPO, filename=rel)
 
-    staged = target.with_suffix(target.suffix + f".{os.getpid()}.part")
-    shutil.copyfile(cached, staged)
-    os.replace(staged, target)
+    # Fail in seconds rather than twenty minutes.
+    #
+    # `Disk quota exceeded` arrived partway through a 26GB download, on a GPU
+    # that had been paid for since the cold start. The volume is a known size
+    # and the file has a known size, so the answer is available before the
+    # first byte moves — and the operator gets told how much to add rather
+    # than being handed an errno.
+    need = _remote_size(rel)
+    free = shutil.disk_usage(MODELS).free
+    if need and free < need + (2 << 30):  # 2GB of headroom for the trainer itself
+        raise RuntimeError(
+            f"not enough room on the volume for {rel}: needs {need / 1e9:.1f} GB "
+            f"plus headroom, {free / 1e9:.1f} GB free. Grow the network volume by "
+            f"at least {((need + (2 << 30) - free) / 1e9):.0f} GB and retry."
+        )
+
+    # A previous run that died mid-download leaves an incomplete blob behind,
+    # and it counts against the quota while being worth nothing.
+    for stale in MODELS.glob(".cache/huggingface/**/*.incomplete"):
+        stale.unlink(missing_ok=True)
+
+    print(f"fetching training weight {rel} ({need / 1e9:.1f} GB, first run only)", flush=True)
+
+    # `local_dir` writes the real file straight to its final path.
+    #
+    # Without it `hf_hub_download` lands the file in its own cache and returns
+    # that path, leaving us to copy it across — which for a 26GB checkpoint
+    # means 52GB on a volume that already holds ~19GB of render models, and
+    # `OSError: [Errno 122] Disk quota exceeded` partway through the copy. HF
+    # writes to `local_dir/<filename>`, which is exactly where MODELS wants it,
+    # so there is no second copy to run out of room for.
+    hf_hub_download(repo_id=TRAIN_REPO, filename=rel, local_dir=str(MODELS))
+
+    if not target.exists() or target.stat().st_size == 0:
+        raise RuntimeError(f"download finished but {target} is missing or empty")
+
     print(f"  -> {target} ({target.stat().st_size / 1e9:.1f} GB)", flush=True)
     return target
 
@@ -202,9 +277,10 @@ def handler(job):
         # silence is indistinguishable from a hang, and the RunPod console log is
         # the only window into it. But `subprocess.run` with no capture throws
         # the output away, so a failure came back as `ai-toolkit exited 1` and
-        # nothing else, with the traceback only in a console log RunPod purges
-        # along with the job. That is a GPU cold start spent to learn an exit
-        # code, twice.
+        # nothing else: the app's deadletter row, the LoRA record and the toast
+        # all said the same four words, and the traceback existed only in a
+        # console log that RunPod purges with the job. That is a GPU-hour spent
+        # to learn an exit code.
         #
         # So: print each line as it arrives, and keep the last few. The tail
         # rides home in the error and lands in the deadletter row.
