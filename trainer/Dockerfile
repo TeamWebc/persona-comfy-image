@@ -1,4 +1,4 @@
-# The LoRA training worker: ai-toolkit + the Krea 2 training adapter.
+# The LoRA training worker: ai-toolkit against raw Krea 2.
 #
 # A second serverless endpoint, separate from the one that renders. They want
 # opposite execution timeouts — seconds for a frame, an hour for a training —
@@ -63,12 +63,12 @@ RUN pip install --no-cache-dir -r /ai-toolkit/requirements.txt torchaudio && \
 # step above had just reported installing. pip's own upgrade notice in the log
 # names the right one — `python3.11 -m pip`.
 #
-# The adapter that makes Krea 2 trainable. ~19.7k downloads, the same pattern
-# ostris ships for Z-Image and FLUX-schnell. Small enough to bake, and baking it
-# means a cold start does not read it over the volume.
-RUN python3.11 -c "\
-from huggingface_hub import snapshot_download; \
-snapshot_download('ostris/krea2_turbo_training_adapter', local_dir='/adapters/krea2_turbo_training_adapter')"
+# No training adapter baked in any more.
+#
+# `ostris/krea2_turbo_training_adapter` lived here and is gone with the turbo
+# checkpoint it existed to serve. Training now runs against krea2_raw_bf16,
+# which needs no adapter — and reaches the eight edge modules the adapter path
+# could not. See the note beside `arch` in train-krea2.yaml.
 
 # Paths are relative to the REPOSITORY ROOT, not to this file.
 #
@@ -87,7 +87,6 @@ COPY trainer/train-krea2.yaml trainer/handler.py /build/
 # the same code path a training takes, so a missing package fails here in
 # twenty seconds instead of after a GPU cold start.
 RUN test -f /ai-toolkit/run.py || { echo "MISSING: ai-toolkit/run.py"; exit 1; } && \
-    test -d /adapters/krea2_turbo_training_adapter || { echo "MISSING: training adapter"; exit 1; } && \
     python3.11 -c "import runpod, boto3, yaml, requests" && \
     python3.11 -c "\
 import torch, numpy; \
