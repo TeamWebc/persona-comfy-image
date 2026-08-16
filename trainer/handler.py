@@ -88,7 +88,16 @@ for _cache in ("HF_HOME", "HF_HUB_CACHE", "TRANSFORMERS_CACHE"):
 # because they are ~34GB and both endpoints share the volume they land on.
 TRAIN_REPO = "Comfy-Org/Krea-2"
 TRAIN_FILES = {
-    "name_or_path": "diffusion_models/krea2_turbo_bf16.safetensors",
+    # RAW, not turbo — see the long note beside `arch` in train-krea2.yaml.
+    #
+    # Training against the turbo distillation requires ostris' training adapter,
+    # and that adapter reaches eight fewer modules than a LoRA needs to carry
+    # skin texture and hair tone. The raw checkpoint trains without an adapter
+    # and reaches all of them. Inference is unchanged: the renderer still loads
+    # krea2_turbo_fp8_scaled, and a LoRA transfers between a model and its own
+    # distillation. The turbo bf16 stays on the volume — reverting is this one
+    # line, not another 26GB download.
+    "name_or_path": "diffusion_models/krea2_raw_bf16.safetensors",
     "text_encoder_path": "text_encoders/qwen3vl_4b_bf16.safetensors",
     # Not quantised in the first place, so the render copy is the training copy.
     "vae_path": "vae/qwen_image_vae.safetensors",
