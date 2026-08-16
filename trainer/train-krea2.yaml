@@ -15,9 +15,18 @@
 #                            about her — the same reason `autocaption: false` is
 #                            hardcoded on the Replicate trainer row.
 #
-#   resolution               Multi-resolution buckets. The dataset is portrait
-#                            (1024x1280) but a LoRA trained at one shape renders
-#                            badly at others, and the feed asks for several.
+#   resolution               Multi-resolution buckets. A LoRA trained at one
+#                            shape renders badly at others and the feed asks for
+#                            several, so more than one bucket is wanted.
+#
+#                            1280 was in this list and is gone. The frames are
+#                            1080 on the short edge, so that bucket trained on an
+#                            upscale of what we paid to render — and it is where
+#                            peak memory lives. A 3000-step run reached step 13,
+#                            hit the 1280 bucket and died with "OOM during
+#                            training step 3 times in a row" after the GPU had
+#                            been paid for since the cold start. Nothing is lost
+#                            by removing it and a 24GB card becomes viable.
 #
 #   network.linear = 16      Rank. Overridden per run. 16 is enough for one
 #                            face; higher starts learning the backgrounds too.
@@ -49,7 +58,7 @@ config:
           caption_dropout_rate: 0.0
           shuffle_tokens: false
           cache_latents_to_disk: true
-          resolution: [768, 1024, 1280]
+          resolution: [768, 1024]
 
       train:
         batch_size: 1
@@ -65,9 +74,14 @@ config:
         lr: 1e-4
         dtype: bf16
 
+        # Off, and kept rather than deleted so the choice stays visible.
+        #
+        # EMA averages weights across steps to stabilise training. The
+        # practitioner consensus for this model is that it costs more than it
+        # buys — LoRAs trained with it came out worse than the same run without.
+        # Flip to true to test that against our own dataset.
         ema_config:
-          use_ema: true
-          ema_decay: 0.99
+          use_ema: false
 
       model:
         # All three filled in by handler.py from the network volume.
@@ -75,8 +89,23 @@ config:
         text_encoder_path: PLACEHOLDER
         vae_path: PLACEHOLDER
         arch: krea2
-        # What makes Krea 2 trainable at all.
-        adapter_path: /adapters/krea2_turbo_training_adapter
+        # NO adapter_path, and no turbo checkpoint above it.
+        #
+        # ai-toolkit trains Krea 2 two ways: the raw model, or the turbo
+        # distillation through `ostris/krea2_turbo_training_adapter`. We used the
+        # adapter, and it cost the thing hardest to get back.
+        #
+        # Measured against a fal-trained LoRA of the same face at the same rank
+        # and step count: fal touches 264 modules, the adapter path touches 256.
+        # The eight missing ones are the edges — first, last_linear, tmlp_0,
+        # tmlp_2, tproj_1, txtmlp_1, txtmlp_3, txtfusion_projector — and those are
+        # where a latent becomes pixels. So the LoRA learned who she is and not
+        # how she is photographed: right face, flat platinum hair, smooth skin, no
+        # freckles. The operator saw it instantly; the similarity score, which
+        # rewards closeness to the reference frames, ranked it fine.
+        #
+        # `_write_config` overwrites keys and never deletes them, so this stays
+        # absent here rather than being popped in the handler.
         quantize: true
 
       sample:
