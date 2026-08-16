@@ -44,6 +44,25 @@ config:
         type: lora
         linear: 16
         linear_alpha: 16
+        # Reach the eight layers that sit outside the transformer blocks.
+        #
+        # ai-toolkit defaults this to true (config_modules.py), and with it on a
+        # module only gets a LoRA if its name contains one of
+        # `get_transformer_block_names()` — which for Krea 2 is exactly
+        # `["blocks"]` (krea2.py). Everything at the edges therefore hits
+        # `skip = True` in lora_special.py: first, last_linear, tmlp_0, tmlp_2,
+        # tproj_1, txtmlp_1, txtmlp_3, txtfusion.projector.
+        #
+        # That is the entire 256-vs-264 gap against a fal-trained LoRA of the
+        # same face at the same rank, and those eight are where a latent becomes
+        # pixels — the patch input projection, the timestep and text
+        # projections, the final output layer. Without them a LoRA learns her
+        # face and not her photograph: right features, flat hair, no skin.
+        #
+        # ai-toolkit's own `get_quantization_exclude_modules()` lists the same
+        # eight as too sensitive to quantise, which is a second vote for them
+        # mattering more than their count suggests.
+        transformer_only: false
 
       save:
         dtype: float16
