@@ -114,18 +114,22 @@ RUN set -eux; \
 # the face-pass workflow binds to. The second takes `prompt` as text and returns
 # a MASK, which is exactly the shape `SetLatentNoiseMask` wants.
 #
-# ## The one dependency that is dropped, and why
+# ## The one dependency that is substituted, and why
 #
 # `decord` is in the pack's requirements and cannot be installed here. It is a
 # video decoder that builds from source — CMake and ffmpeg headers — and its
 # last release ships no wheel for Python 3.12, which is what this base image
-# runs. It fails the build.
+# runs. It failed the build.
 #
-# It is also not needed. `decord` serves `easy_sam3_video_segmentation`, and the
-# face pass uses `easy_sam3_image_segmentation`. Filtered out rather than
-# `|| true` on the whole install, because a blanket ignore would also swallow a
-# real failure in `timm`, which the image node genuinely needs — and the assert
-# below is what catches it if dropping this one turns out to matter.
+# Dropping it was the first attempt and it was WRONG, in the way that costs a
+# deploy: the pack imports it at module scope, so without it the whole pack
+# raises on import and ComfyUI registers NONE of its nodes — including the image
+# one, which never touches video. The build passed, the workers rolled out, and
+# every SAM 3 class was missing from a worker that reported itself healthy.
+#
+# `eva-decord` is the maintained fork. Same import name, so the pack cannot tell
+# the difference, and it publishes a `py3-none-manylinux2010_x86_64` wheel that
+# installs on 3.12 without a compiler.
 ARG SAM3_REF=main
 RUN set -eux; \
     git clone --depth 1 --branch "${SAM3_REF}" \
@@ -134,7 +138,28 @@ RUN set -eux; \
     grep -v '^[[:space:]]*decord' \
       /comfyui/custom_nodes/ComfyUI-Easy-Sam3/requirements.txt > /tmp/sam3-requirements.txt; \
     cat /tmp/sam3-requirements.txt; \
-    pip install --no-cache-dir -r /tmp/sam3-requirements.txt
+    pip install --no-cache-dir -r /tmp/sam3-requirements.txt; \
+    pip install --no-cache-dir eva-decord
+
+# Fail the BUILD if the pack cannot be imported.
+#
+# The check below this one greps for class definitions, and that is what let a
+# broken image ship: a class can be defined in a file that raises on import, and
+# `grep` cannot tell. This runs the import that ComfyUI will run, so an
+# unsatisfied dependency is a red build instead of a worker that starts cleanly
+# and is missing every node the graph asks for.
+#
+# `import decord` explicitly as well as the pack, because that is the specific
+# thing that broke and a named failure beats a traceback.
+RUN set -eux; \
+    python -c "import decord; print('decord ok', decord.__name__)"; \
+    cd /comfyui/custom_nodes; \
+    python -c "import importlib, sys; sys.path.insert(0, '.'); \
+importlib.import_module('ComfyUI-Easy-Sam3'.replace('-', '_')) if False else None; \
+import importlib.util as u; \
+spec = u.spec_from_file_location('sam3pack', 'ComfyUI-Easy-Sam3/__init__.py'); \
+m = u.module_from_spec(spec); spec.loader.exec_module(m); \
+print('sam3 pack imports, classes:', len([k for k in dir(m) if 'Sam3' in k]))"
 
 # Fail the BUILD if the classes the face pass binds to are not there.
 #
