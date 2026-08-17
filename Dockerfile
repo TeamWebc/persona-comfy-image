@@ -145,7 +145,7 @@ RUN set -eux; \
 #
 # Editing the base image's yaml in place would work and is worse: it means
 # reproducing every key it already declares, and silently dropping one the day
-# RunPod adds it. A symlink asserts one fact and leaves the rest alone.
+# RunPod adds it. A symlink asserts one fact and leaves the rest alone.   
 #
 # Dangling at build time on purpose — /runpod-volume exists only on a running
 # worker. A symlink to a path that is not there yet is not an error, it is a
