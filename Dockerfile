@@ -85,6 +85,54 @@ RUN set -eux; \
       || { echo "ERROR: comfyui-krea2edit registered neither node — check KREA2EDIT_REF"; exit 1; }; \
     echo "krea2edit nodes present"
 
+# SAM 3, which is what makes "only her head" possible.
+#
+# The face pass replaces her face, her hair and its colour, and must leave
+# everything below the neck as the bytes it already was. Stock ComfyUI can mask
+# a latent — `SetLatentNoiseMask` and `ImageCompositeMasked` are both already
+# present on this worker — but nothing in it, and nothing in this repo, can say
+# WHERE a head is. Without that the region has to be guessed, and a guess that
+# works against a seamless studio ground fails against a room.
+#
+# ## Why SAM 3, and why a pack rather than the core nodes
+#
+# SAM 1 and 2 cannot answer this: they are promptable, they segment what you
+# point at, and they have no idea what a head is — they would still need
+# something to tell them where to look, which is the missing part. SAM 3 takes a
+# TEXT prompt, so `"hair, face"` returns the region by name, pixel-accurate,
+# open-vocabulary, on any background. That last property is why it beats a face
+# detector here: a box around a face either clips the hair or, grown wide enough
+# to hold it, takes the shoulders and the background with it, and the
+# requirement names hair explicitly.
+#
+# ComfyUI has supported SAM 3.1 natively since PR #13408, which would mean no
+# pack at all — but it needs a core bump, and `COMFYUI_REF` is what every render
+# path in this system runs on. A pack touches one graph; a core bump touches all
+# of them. Deliberate: this is the smaller blast radius, not the tidier build.
+#
+# `easy_load_sam3_model` and `easy_sam3_image_segmentation` are the two classes
+# the face-pass workflow binds to. The second takes `prompt` as text and returns
+# a MASK, which is exactly the shape `SetLatentNoiseMask` wants.
+ARG SAM3_REF=main
+RUN set -eux; \
+    git clone --depth 1 --branch "${SAM3_REF}" \
+      https://github.com/yolain/ComfyUI-Easy-Sam3.git \
+      /comfyui/custom_nodes/ComfyUI-Easy-Sam3; \
+    pip install --no-cache-dir \
+      -r /comfyui/custom_nodes/ComfyUI-Easy-Sam3/requirements.txt
+
+# Fail the BUILD if the nodes the face pass binds to are not registered.
+#
+# Same twenty seconds and the same reasoning as the krea2edit check above, and
+# it matters more here: a missing mask node does not degrade the pass, it makes
+# the graph unbuildable — and this worker reports an unbuildable graph as a
+# COMPLETED job with the reason buried in output.errors.
+RUN set -eux; \
+    grep -rq 'easy_sam3_image_segmentation' /comfyui/custom_nodes/ComfyUI-Easy-Sam3/ \
+      && grep -rq 'easy_load_sam3_model' /comfyui/custom_nodes/ComfyUI-Easy-Sam3/ \
+      || { echo "ERROR: ComfyUI-Easy-Sam3 registered neither node — check SAM3_REF"; exit 1; }; \
+    echo "sam3 nodes present"
+
 # VHS_VideoCombine, for the Wan video workflows.
 #
 # Deliberately non-fatal. Nothing in the Krea stills path needs it, and
