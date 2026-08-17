@@ -12,7 +12,7 @@
 #
 # So the base image is right and only ComfyUI inside it is stale. This upgrades
 # that one thing and changes nothing else — no weights, no custom handler, so
-# the input and output contract the provider speaks is untouched.
+# the input and output contract the provider speaks is untouched. 
 #
 # There is nothing here your machine has to build. RunPod builds it: Serverless
 # -> Deploy from a GitHub repository. See TRAINING-free build notes in SETUP.md.
