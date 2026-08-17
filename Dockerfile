@@ -152,32 +152,33 @@ RUN set -eux; \
 # `import decord` explicitly as well as the pack, because that is the specific
 # thing that broke and a named failure beats a traceback.
 #
-# Written to a file rather than passed as `python -c`. The first version was a
-# one-liner and failed on its own quoting and, worse, on its own semantics: a
-# module loaded through `spec_from_file_location` is not a package unless it is
-# given `submodule_search_locations` AND registered in `sys.modules` before it
-# executes, so the pack's own `from .nodes import *` could not resolve. The pack
-# was fine; the check was broken, and it took a build with it.
+# ## Why this does NOT import the pack, and cannot
 #
-# This is the import ComfyUI itself performs, including putting /comfyui on the
-# path — the pack imports `comfy` and `folder_paths`, and without that the check
-# would fail for a reason that has nothing to do with the pack.
+# Two builds were burned trying. The pack's `nodes.py` does
+# `import comfy.model_management`, and that module calls
+# `torch.cuda.current_device()` at import time — so importing it raises
+# "Found no NVIDIA driver on your system". A Docker build has no GPU. There is
+# no way to write a build-time import check for a ComfyUI node pack, and the
+# attempts to write one were the only thing that failed.
+#
+# So the build verifies the two things it actually can:
+#
+#   `import decord`, which is the dependency that genuinely broke — it needs no
+#   GPU, and a red build here is the failure worth catching.
+#
+#   That the pack's Python compiles and defines its classes. `compileall`
+#   parses without executing, so it catches a truncated clone or a syntax error
+#   in a version bump without touching CUDA.
+#
+# Whether ComfyUI REGISTERS the nodes is unanswerable here and is checked on the
+# running worker instead, by submitting a one-node graph and reading whether the
+# error is `missing_node_type`.
 RUN set -eux; \
     python -c "import decord; print('decord ok:', decord.__name__)"; \
-    printf '%s\n' \
-      'import importlib.util as u, sys' \
-      'sys.path.insert(0, "/comfyui")' \
-      'sys.path.insert(0, "/comfyui/custom_nodes")' \
-      'p = "/comfyui/custom_nodes/ComfyUI-Easy-Sam3"' \
-      'spec = u.spec_from_file_location("sam3pack", p + "/__init__.py", submodule_search_locations=[p])' \
-      'm = u.module_from_spec(spec)' \
-      'sys.modules["sam3pack"] = m' \
-      'spec.loader.exec_module(m)' \
-      'names = [k for k in dir(m) if "Sam3" in k or "sam3" in k]' \
-      'print("sam3 pack imports ok, symbols:", len(names), names[:6])' \
-      'assert names, "pack imported but exposes no Sam3 symbols"' \
-      > /tmp/check_sam3.py; \
-    python /tmp/check_sam3.py
+    python -m compileall -q /comfyui/custom_nodes/ComfyUI-Easy-Sam3 >/dev/null; \
+    grep -rq 'class Sam3ImageSegmentation' /comfyui/custom_nodes/ComfyUI-Easy-Sam3/; \
+    grep -rq 'class LoadSam3Model' /comfyui/custom_nodes/ComfyUI-Easy-Sam3/; \
+    echo "sam3 pack compiles and defines its classes"
 
 # Fail the BUILD if the classes the face pass binds to are not there.
 #
