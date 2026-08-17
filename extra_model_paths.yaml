@@ -1,0 +1,36 @@
+# Where ComfyUI looks for weights, in addition to its own models/ directory.
+#
+# RunPod mounts an endpoint's network volume at /runpod-volume on every worker.
+# Populating that once from a rented pod is what makes this image small enough
+# to push from a laptop — see SETUP.md.
+#
+# The paths below must match the destination directories in models.txt, which
+# in turn must match the filenames named inside the workflow templates in
+# server/media/workflows/. Three files, one set of names.
+
+runpod_volume:
+  base_path: /runpod-volume/
+  diffusion_models: models/diffusion_models/
+  unet: models/diffusion_models/
+  text_encoders: models/text_encoders/
+  clip: models/text_encoders/
+  vae: models/vae/
+  loras: models/loras/
+  checkpoints: models/checkpoints/
+  # Persona LoRAs synced up from R2. Kept separate from the LoRAs that ship
+  # with a model group so that wiping and re-pulling one never touches the
+  # other — these are the only irreplaceable files on the volume.
+  # (The `loras` key above already covers models/loras; this is the same tree.)
+
+  # SAM 3 is deliberately NOT here.
+  #
+  # This file is documentation of the mapping the worker image ships — nothing
+  # copies it into the image and no script reads it, so a key added here reaches
+  # nothing. That was almost a silent failure: the weights would sit on the
+  # volume, `easy_load_sam3_model` would list an empty directory, and the graph
+  # would fail to build as a COMPLETED job.
+  #
+  # `models/sam3` is a directory a custom node invented, so no published mapping
+  # mentions it. The Dockerfile symlinks /comfyui/models/sam3 at the volume
+  # instead, which asserts that one fact without reproducing every key this file
+  # already lists.
