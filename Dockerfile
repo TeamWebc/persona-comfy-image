@@ -136,16 +136,27 @@ RUN set -eux; \
     cat /tmp/sam3-requirements.txt; \
     pip install --no-cache-dir -r /tmp/sam3-requirements.txt
 
-# Fail the BUILD if the nodes the face pass binds to are not registered.
+# Fail the BUILD if the classes the face pass binds to are not there.
 #
 # Same twenty seconds and the same reasoning as the krea2edit check above, and
 # it matters more here: a missing mask node does not degrade the pass, it makes
 # the graph unbuildable — and this worker reports an unbuildable graph as a
 # COMPLETED job with the reason buried in output.errors.
+#
+# Grepping the PYTHON CLASS names, not the registered node names. The first
+# version of this check looked for `easy_sam3_image_segmentation` — the name the
+# pack's README documents and the name a workflow's `class_type` uses — and
+# failed the build, because that string is generated at registration and appears
+# nowhere in the source. `Sam3ImageSegmentation` and `LoadSam3Model` are the
+# classes in nodes.py and are what can actually be asserted from a Dockerfile.
+#
+# This checks the pack exists and defines what it should. It cannot check the
+# name the graph must call it by — that comes off the running worker, which is
+# the only thing that knows.
 RUN set -eux; \
-    grep -rq 'easy_sam3_image_segmentation' /comfyui/custom_nodes/ComfyUI-Easy-Sam3/ \
-      && grep -rq 'easy_load_sam3_model' /comfyui/custom_nodes/ComfyUI-Easy-Sam3/ \
-      || { echo "ERROR: ComfyUI-Easy-Sam3 registered neither node — check SAM3_REF"; exit 1; }; \
+    grep -rq 'class Sam3ImageSegmentation' /comfyui/custom_nodes/ComfyUI-Easy-Sam3/ \
+      && grep -rq 'class LoadSam3Model' /comfyui/custom_nodes/ComfyUI-Easy-Sam3/ \
+      || { echo "ERROR: ComfyUI-Easy-Sam3 defines neither class — check SAM3_REF"; exit 1; }; \
     echo "sam3 nodes present"
 
 # Point ComfyUI at the SAM 3 weights on the volume.
