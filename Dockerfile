@@ -133,6 +133,28 @@ RUN set -eux; \
       || { echo "ERROR: ComfyUI-Easy-Sam3 registered neither node — check SAM3_REF"; exit 1; }; \
     echo "sam3 nodes present"
 
+# Point ComfyUI at the SAM 3 weights on the volume.
+#
+# A symlink rather than a line in `extra_model_paths.yaml`, and the difference
+# matters: the yaml in the persona repo is DOCUMENTATION. Nothing copies it into
+# this image and no script reads it — the mapping that actually runs ships
+# inside `runpod/worker-comfyui`, and it knows about diffusion models, VAEs,
+# LoRAs and text encoders because those are the directories ComfyUI has always
+# had. `models/sam3` is a directory a custom node invented, so no published
+# mapping mentions it and editing our copy would change nothing at all.
+#
+# Editing the base image's yaml in place would work and is worse: it means
+# reproducing every key it already declares, and silently dropping one the day
+# RunPod adds it. A symlink asserts one fact and leaves the rest alone.
+#
+# Dangling at build time on purpose — /runpod-volume exists only on a running
+# worker. A symlink to a path that is not there yet is not an error, it is a
+# promise that resolves at mount.
+RUN set -eux; \
+    mkdir -p /comfyui/models; \
+    ln -sfn /runpod-volume/models/sam3 /comfyui/models/sam3; \
+    echo "sam3 weights directory linked to the volume"
+
 # VHS_VideoCombine, for the Wan video workflows.
 #
 # Deliberately non-fatal. Nothing in the Krea stills path needs it, and
