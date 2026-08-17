@@ -151,15 +151,33 @@ RUN set -eux; \
 #
 # `import decord` explicitly as well as the pack, because that is the specific
 # thing that broke and a named failure beats a traceback.
+#
+# Written to a file rather than passed as `python -c`. The first version was a
+# one-liner and failed on its own quoting and, worse, on its own semantics: a
+# module loaded through `spec_from_file_location` is not a package unless it is
+# given `submodule_search_locations` AND registered in `sys.modules` before it
+# executes, so the pack's own `from .nodes import *` could not resolve. The pack
+# was fine; the check was broken, and it took a build with it.
+#
+# This is the import ComfyUI itself performs, including putting /comfyui on the
+# path — the pack imports `comfy` and `folder_paths`, and without that the check
+# would fail for a reason that has nothing to do with the pack.
 RUN set -eux; \
-    python -c "import decord; print('decord ok', decord.__name__)"; \
-    cd /comfyui/custom_nodes; \
-    python -c "import importlib, sys; sys.path.insert(0, '.'); \
-importlib.import_module('ComfyUI-Easy-Sam3'.replace('-', '_')) if False else None; \
-import importlib.util as u; \
-spec = u.spec_from_file_location('sam3pack', 'ComfyUI-Easy-Sam3/__init__.py'); \
-m = u.module_from_spec(spec); spec.loader.exec_module(m); \
-print('sam3 pack imports, classes:', len([k for k in dir(m) if 'Sam3' in k]))"
+    python -c "import decord; print('decord ok:', decord.__name__)"; \
+    printf '%s\n' \
+      'import importlib.util as u, sys' \
+      'sys.path.insert(0, "/comfyui")' \
+      'sys.path.insert(0, "/comfyui/custom_nodes")' \
+      'p = "/comfyui/custom_nodes/ComfyUI-Easy-Sam3"' \
+      'spec = u.spec_from_file_location("sam3pack", p + "/__init__.py", submodule_search_locations=[p])' \
+      'm = u.module_from_spec(spec)' \
+      'sys.modules["sam3pack"] = m' \
+      'spec.loader.exec_module(m)' \
+      'names = [k for k in dir(m) if "Sam3" in k or "sam3" in k]' \
+      'print("sam3 pack imports ok, symbols:", len(names), names[:6])' \
+      'assert names, "pack imported but exposes no Sam3 symbols"' \
+      > /tmp/check_sam3.py; \
+    python /tmp/check_sam3.py
 
 # Fail the BUILD if the classes the face pass binds to are not there.
 #
