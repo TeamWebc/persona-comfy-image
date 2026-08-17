@@ -12,7 +12,7 @@
 #
 # So the base image is right and only ComfyUI inside it is stale. This upgrades
 # that one thing and changes nothing else — no weights, no custom handler, so
-# the input and output contract the provider speaks is untouched. 
+# the input and output contract the provider speaks is untouched.
 #
 # There is nothing here your machine has to build. RunPod builds it: Serverless
 # -> Deploy from a GitHub repository. See TRAINING-free build notes in SETUP.md.
@@ -113,13 +113,28 @@ RUN set -eux; \
 # `easy_load_sam3_model` and `easy_sam3_image_segmentation` are the two classes
 # the face-pass workflow binds to. The second takes `prompt` as text and returns
 # a MASK, which is exactly the shape `SetLatentNoiseMask` wants.
+#
+# ## The one dependency that is dropped, and why
+#
+# `decord` is in the pack's requirements and cannot be installed here. It is a
+# video decoder that builds from source — CMake and ffmpeg headers — and its
+# last release ships no wheel for Python 3.12, which is what this base image
+# runs. It fails the build.
+#
+# It is also not needed. `decord` serves `easy_sam3_video_segmentation`, and the
+# face pass uses `easy_sam3_image_segmentation`. Filtered out rather than
+# `|| true` on the whole install, because a blanket ignore would also swallow a
+# real failure in `timm`, which the image node genuinely needs — and the assert
+# below is what catches it if dropping this one turns out to matter.
 ARG SAM3_REF=main
 RUN set -eux; \
     git clone --depth 1 --branch "${SAM3_REF}" \
       https://github.com/yolain/ComfyUI-Easy-Sam3.git \
       /comfyui/custom_nodes/ComfyUI-Easy-Sam3; \
-    pip install --no-cache-dir \
-      -r /comfyui/custom_nodes/ComfyUI-Easy-Sam3/requirements.txt
+    grep -v '^[[:space:]]*decord' \
+      /comfyui/custom_nodes/ComfyUI-Easy-Sam3/requirements.txt > /tmp/sam3-requirements.txt; \
+    cat /tmp/sam3-requirements.txt; \
+    pip install --no-cache-dir -r /tmp/sam3-requirements.txt
 
 # Fail the BUILD if the nodes the face pass binds to are not registered.
 #
@@ -145,7 +160,7 @@ RUN set -eux; \
 #
 # Editing the base image's yaml in place would work and is worse: it means
 # reproducing every key it already declares, and silently dropping one the day
-# RunPod adds it. A symlink asserts one fact and leaves the rest alone.   
+# RunPod adds it. A symlink asserts one fact and leaves the rest alone.
 #
 # Dangling at build time on purpose — /runpod-volume exists only on a running
 # worker. A symlink to a path that is not there yet is not an error, it is a
