@@ -58,6 +58,22 @@ RUN set -eux; \
       || { echo "ERROR: this ComfyUI has no krea2 CLIPLoader type — check COMFYUI_REF"; exit 1; }; \
     echo "krea2 CLIPLoader type present"
 
+# Fail the BUILD if this ComfyUI predates MiniMax H3.
+#
+# Same check, one model later. H3 landed in core on 3 August 2026 (0.30.0): a
+# file of nodes and a `minimax` CLIPLoader type, no custom pack. An image built
+# from an older master starts cleanly, accepts the H3 graph, and returns a
+# COMPLETED job whose only content is "MiniMaxH3ImageToVideo" under
+# `node_errors` — which from the app is a clip that came back empty. The two
+# strings below are the node the i2v template binds to and the encoder type its
+# CLIPLoader names, so a rename upstream fails here and not on a cold start.
+RUN set -eux; \
+    test -f /comfyui/comfy_extras/nodes_minimax_h3.py \
+      && grep -q 'MiniMaxH3ImageToVideo' /comfyui/comfy_extras/nodes_minimax_h3.py \
+      && grep -q '"minimax"' /comfyui/nodes.py \
+      || { echo "ERROR: this ComfyUI has no MiniMax H3 nodes — check COMFYUI_REF"; exit 1; }; \
+    echo "minimax h3 nodes present"
+
 # comfyui-krea2edit, which is what lets Krea 2 be handed a photograph of her.
 #
 # Apache-2.0, no Python dependencies of its own — it registers two nodes,
