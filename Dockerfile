@@ -241,6 +241,32 @@ RUN set -eux; \
     ln -sfn /runpod-volume/models/sam3 /comfyui/models/sam3; \
     echo "sam3 weights directory linked to the volume"
 
+# Let ComfyUI see the volume's diffusion_models/ and text_encoders/ directories.
+#
+# The worker image ships an extra_model_paths.yaml that maps the network volume
+# under ComfyUI's OLD folder names — `unet: models/unet/`, `clip: models/clip/` —
+# and never learned the new ones. So a checkpoint in /runpod-volume/models/
+# diffusion_models/ and an encoder in text_encoders/ are invisible to UNETLoader
+# and CLIPLoader, while a LoRA or a VAE beside them is found. Krea 2 rendered
+# anyway because bootstrap-pod.sh once planted relative symlinks in unet/ and
+# clip/ pointing at the real files; MiniMax H3 arrived without them and every
+# render failed with "value not in list" against the two symlinked names,
+# which took an evening to read correctly.
+#
+# Appended as a second section rather than replacing the file, so the mapping
+# RunPod ships stays exactly as it is and this adds the two keys it lacks.
+# ComfyUI merges every top-level section; the same directory reached by two
+# names is listed once. The python line proves the YAML still parses and the
+# keys are where ComfyUI will look, at build time rather than on a cold start.
+RUN set -eux; \
+    test -f /comfyui/extra_model_paths.yaml; \
+    printf '\npersona_volume:\n  base_path: /runpod-volume\n  diffusion_models: models/diffusion_models/\n  text_encoders: models/text_encoders/\n' \
+      >> /comfyui/extra_model_paths.yaml; \
+    python -c "import yaml; d=yaml.safe_load(open('/comfyui/extra_model_paths.yaml')); \
+      assert d['persona_volume']['diffusion_models']=='models/diffusion_models/'; \
+      assert d['persona_volume']['text_encoders']=='models/text_encoders/'; \
+      print('extra model paths:', ', '.join(sorted(d)))"
+
 # VHS_VideoCombine, for the Wan video workflows.
 #
 # Deliberately non-fatal. Nothing in the Krea stills path needs it, and
