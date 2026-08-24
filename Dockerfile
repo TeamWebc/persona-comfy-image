@@ -72,6 +72,8 @@ RUN set -eux; \
 RUN set -eux; \
     test -f /comfyui/comfy_extras/nodes_minimax_h3.py \
       && grep -q 'MiniMaxH3ImageToVideo' /comfyui/comfy_extras/nodes_minimax_h3.py \
+      && grep -q 'MiniMaxH3AddGuide' /comfyui/comfy_extras/nodes_minimax_h3.py \
+      && grep -q 'MiniMaxH3ReferenceToVideo' /comfyui/comfy_extras/nodes_minimax_h3.py \
       && grep -q '"minimax"' /comfyui/nodes.py \
       || { echo "ERROR: this ComfyUI has no MiniMax H3 nodes — check COMFYUI_REF"; exit 1; }; \
     echo "minimax h3 nodes present"
