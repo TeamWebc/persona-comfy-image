@@ -20,11 +20,13 @@
 ARG WORKER_COMFYUI_TAG=5.8.6-base
 FROM runpod/worker-comfyui:${WORKER_COMFYUI_TAG}
 
-# Which ComfyUI to move to. `master` is deliberate rather than a pinned tag:
-# the models in this stack are new enough that a release older than a few weeks
-# does not know about them, and the failure is legible (a named node, a listed
-# enum) rather than subtle. Pin it once the stack stops moving.
-ARG COMFYUI_REF=master
+# Which ComfyUI to move to. A pinned SHA rather than `master`, and the change is
+# the lesson: `master` never busts Docker's layer cache, so a rebuild kept the
+# checkout from whenever the layer was first built — which is how an endpoint
+# built on 2026-08-22 was missing MiniMaxH3AddGuide (landed 2026-08-13). Bump
+# the SHA to move ComfyUI; the new value is what invalidates the layer.
+# b78cec87 = master @ 2026-08-23 (has MiniMaxH3AddGuide + H3 R2V nodes).
+ARG COMFYUI_REF=b78cec879b9460d5cb25228a83a942fb78d2cd24
 
 # Upgrade ComfyUI in place.
 #
