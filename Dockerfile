@@ -26,7 +26,8 @@ FROM runpod/worker-comfyui:${WORKER_COMFYUI_TAG}
 # built on 2026-08-22 was missing MiniMaxH3AddGuide (landed 2026-08-13). Bump
 # the SHA to move ComfyUI; the new value is what invalidates the layer.
 # b78cec87 = master @ 2026-08-23 (has MiniMaxH3AddGuide + H3 R2V nodes).
-ARG COMFYUI_REF=b78cec879b9460d5cb25228a83a942fb78d2cd24
+# b5cc8830 = master @ 2026-09-22 (adds TextEncodeQwenImage21 / Qwen-Image 2.1).
+ARG COMFYUI_REF=b5cc8830279eae909a59de030af1e50761c36751
 
 # Upgrade ComfyUI in place.
 #
@@ -77,6 +78,13 @@ RUN set -eux; \
       && grep -q '"minimax"' /comfyui/nodes.py \
       || { echo "ERROR: this ComfyUI has no MiniMax H3 nodes — check COMFYUI_REF"; exit 1; }; \
     echo "minimax h3 nodes present"
+
+# Fail the BUILD if this ComfyUI predates Qwen-Image 2.1 (workflow qwen21.json).
+# Its encoder is a core node from 2026-09; the 08-23 pin above did not have it.
+RUN set -eux; \
+    grep -q 'TextEncodeQwenImage21' /comfyui/comfy_extras/nodes_qwen.py \
+      || { echo "ERROR: this ComfyUI has no TextEncodeQwenImage21 — check COMFYUI_REF"; exit 1; }; \
+    echo "qwen image 2.1 encoder present"
 
 # comfyui-krea2edit, which is what lets Krea 2 be handed a photograph of her.
 #
